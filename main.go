@@ -1,12 +1,37 @@
 package main
 
 import (
+	"database/sql"
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
+	"net/http"
 	"time"
 
 	"github.com/BurntSushi/toml"
+	_ "github.com/go-sql-driver/mysql"
 )
+
+type Game struct {
+	Appid                    int64  `json:"appid"`
+	HasCommunityVisibleStats bool   `json:"has_community_visible_stats"`
+	ImgIconURL               string `json:"img_icon_url"`
+	ImgLogoURL               string `json:"img_logo_url"`
+	Name                     string `json:"name"`
+	Playtime2weeks           int64  `json:"playtime_2weeks"`
+	PlaytimeForever          int64  `json:"playtime_forever"`
+	PlaytimeLinuxForever     int64  `json:"playtime_linux_forever"`
+	PlaytimeMacForever       int64  `json:"playtime_mac_forever"`
+	PlaytimeWindowsForever   int64  `json:"playtime_windows_forever"`
+}
+
+type OwnedGames struct {
+	Response struct {
+		GameCount int64  `json:"game_count"`
+		Games     []Game `json:"games"`
+	} `json:"response"`
+}
 
 type Steam struct {
 	APIKey string `toml:"api_key"`
@@ -14,10 +39,11 @@ type Steam struct {
 }
 
 type Database struct {
-	Hostname string `toml:"hostname"`
-	Port     string `toml:"port"`
-	Username string `toml:"username"`
-	Password string `toml:"password"`
+	Hostname   string `toml:"hostname"`
+	Port       string `toml:"port"`
+	Username   string `toml:"username"`
+	Password   string `toml:"password"`
+	Schemaname string `toml:"schema_name"`
 }
 
 type Config struct {
@@ -41,7 +67,52 @@ func main() {
 		log.Fatal(err)
 	}
 
-	log.Printf("%+v\n", config)
-	log.Printf("[%s]\n", config.Database.Hostname)
-	log.Printf("[%s]\n", config.Database.Username)
+	db, err := sql.Open("mysql",
+		config.Database.Username+
+			":"+
+			config.Database.Password+
+			"@tcp("+
+			config.Database.Hostname+
+			":"+
+			config.Database.Port+
+			")/"+
+			config.Database.Schemaname)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	if err = db.Ping(); err != nil {
+		log.Fatal(err)
+	}
+
+	url := "https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?key=" +
+		config.Steam.APIKey +
+		"&steamid=" +
+		config.Steam.ID +
+		"&include_appinfo=1" +
+		"&format=json"
+	log.Printf("\"%s\"\n", url)
+
+	res, err := http.Get(url)
+	if err != nil {
+		log.Fatalln(err)
+	}
+	defer res.Body.Close()
+
+	body, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	var ogs OwnedGames
+	err = json.Unmarshal(body, &ogs)
+	if err != nil {
+		panic(err)
+	}
+
+	for _, game := range ogs.Response.Games {
+		fmt.Printf("%+v\n", game)
+	}
+
 }
