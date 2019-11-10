@@ -1,0 +1,9 @@
+[steam]
+api_key = "<STEAM_API_KEY>"
+id = "<STEAM_USER_ID>"
+
+[database]
+hostname = "<DATABASE_HOSTNAME>"
+port = "<DATABASE_PORT>"
+username = "<DATABASE_USERNAME>"
+password = "<DATABASE_PASSWORD>"
