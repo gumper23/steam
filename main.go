@@ -39,11 +39,11 @@ type Steam struct {
 }
 
 type Database struct {
-	Hostname   string `toml:"hostname"`
+	HostName   string `toml:"hostname"`
 	Port       string `toml:"port"`
-	Username   string `toml:"username"`
+	UserName   string `toml:"username"`
 	Password   string `toml:"password"`
-	Schemaname string `toml:"schema_name"`
+	SchemaName string `toml:"schema_name"`
 }
 
 type Config struct {
@@ -68,15 +68,15 @@ func main() {
 	}
 
 	db, err := sql.Open("mysql",
-		config.Database.Username+
+		config.Database.UserName+
 			":"+
 			config.Database.Password+
 			"@tcp("+
-			config.Database.Hostname+
+			config.Database.HostName+
 			":"+
 			config.Database.Port+
 			")/"+
-			config.Database.Schemaname)
+			config.Database.SchemaName)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -108,11 +108,17 @@ func main() {
 	var ogs OwnedGames
 	err = json.Unmarshal(body, &ogs)
 	if err != nil {
-		panic(err)
+		log.Fatalln(err)
 	}
 
+	var total, played int
 	for _, game := range ogs.Response.Games {
-		fmt.Printf("%+v\n", game)
+		total++
+		log.Printf("%+v\n", game)
+		if game.PlaytimeForever != 0 {
+			played++
+		}
 	}
+	log.Printf("Total Games = %d, Played Games = %d, Played %% = %0.2f\n", total, played, float64(played)/float64(total)*100.0)
 
 }
