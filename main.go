@@ -14,6 +14,40 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 )
 
+/*
+mysql -h 127.0.0.1 -P13306 steam -BNe "show create table games\G" | tr '[:upper:]' '[:lower:]' | sed 1,2d | sed 's/`//g' | sed 's/^  /    /g' | sed 's/auto_increment=[0-9]* //g'
+
+create table if not exists games (
+    id int(10) unsigned not null auto_increment,
+    app_id int(10) unsigned not null,
+    has_community_visible_stats tinyint(3) unsigned not null,
+    img_icon_url varchar(255) character set utf8mb4 collate utf8mb4_unicode_ci not null,
+    img_logo_url varchar(255) character set utf8mb4 collate utf8mb4_unicode_ci not null,
+    name varchar(255) character set utf8mb4 collate utf8mb4_unicode_ci not null,
+    playtime_2weeks int(10) unsigned not null default '0',
+    playtime_forever int(10) unsigned not null default '0',
+    playtime_linux_forever int(10) unsigned not null default '0',
+    playtime_mac_forever int(10) unsigned not null default '0',
+    playtime_windows_forever int(10) unsigned not null default '0',
+    created_at date not null,
+    primary key (id),
+    unique key app_id (app_id),
+    key name (name(20)),
+    key playtime_forever (playtime_forever),
+    key created_at (created_at)
+) engine=innodb default charset=utf8mb4 collate=utf8mb4_unicode_ci;
+
+insert into games(id, app_id, has_community_visible_stats, img_icon_url, img_logo_url, name, playtime_forever, created_at)
+select id, app_id, has_community_visible_stats, img_icon_url, img_logo_url, name, playtime_forever, created_at from game g;
+
+insert into games(id, app_id, has_community_visible_stats, img_icon_url, img_logo_url, name, playtime_forever, created_at)
+select id, app_id, has_community_visible_stats, img_icon_url, img_logo_url, name, playtime_forever, created_at from game g
+where not exists (select 1 from games gs where g.app_id = gs.app_id)
+*/
+
+// mysql -h 127.0.0.1 -P13306 steam -BNe "show create table game\G" | grep -o '^[[:blank:]]*`.*`' | sed 's/^[[:blank:]]*//g' | sed 's/`//g' | paste -s -d, - | sed 's/,/, /g'
+// mysql -h 127.0.0.1 -P13306 steam -BNe "show create table game\G" | grep -o '^[[:blank:]]*`.*`' | sed 's/^[[:blank:]]*//g' | sed 's/`//g' | paste -s -d, - | sed 's/,/\n, /g'
+
 // Game holds a steam owned game api game
 type Game struct {
 	Appid                    int    `json:"appid"`
@@ -67,12 +101,13 @@ type logWriter struct {
 }
 
 func (writer logWriter) Write(bytes []byte) (int, error) {
-	return fmt.Print(time.Now().UTC().Format("2006-01-02 15:04:05") + " " + string(bytes))
+	return fmt.Print(time.Now().Format("2006-01-02 15:04:05") + " " + string(bytes))
 }
 
 func main() {
 	log.SetFlags(0)
 	log.SetOutput(new(logWriter))
+	log.Println("Beginning execution")
 
 	var config Config
 	if _, err := toml.DecodeFile("config.toml", &config); err != nil {
@@ -131,6 +166,7 @@ func main() {
 		}
 		sgs[sg.Appid] = sg.PlaytimeForever
 	}
+	rows.Close()
 
 	url := "https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?key=" +
 		config.Steam.APIKey +
@@ -138,7 +174,7 @@ func main() {
 		config.Steam.ID +
 		"&include_appinfo=1" +
 		"&format=json"
-	log.Printf("\"%s\"\n", url)
+	// log.Printf("\"%s\"\n", url)
 
 	res, err := http.Get(url)
 	if err != nil {
@@ -225,4 +261,5 @@ values
 		}
 	}
 	log.Printf("Total Games = %d, Played Games = %d, New Games = %d, Updated Playtime Games = %d, Played %% = %0.2f\n", total, played, inserted, updated, float64(played)/float64(total)*100.0)
+	log.Println("Execution complete")
 }
