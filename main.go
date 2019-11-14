@@ -203,7 +203,7 @@ func main() {
 		if playtime, ok := sgs[game.Appid]; ok {
 			if playtime != game.PlaytimeForever {
 				updated++
-				_, err = db.Exec("update game set playtime_forever = " +
+				_, err = db.Exec("update games set playtime_forever = " +
 					strconv.Itoa(game.PlaytimeForever) +
 					" where app_id = " +
 					strconv.Itoa(game.Appid))
