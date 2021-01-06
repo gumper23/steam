@@ -78,11 +78,11 @@ type Steam struct {
 
 // Database holds credentials for accessing the database
 type Database struct {
-	HostName   string `toml:"hostname"`
-	Port       string `toml:"port"`
-	UserName   string `toml:"username"`
-	Password   string `toml:"password"`
-	SchemaName string `toml:"schema_name"`
+	Host     string `toml:"hostname"`
+	Port     string `toml:"port"`
+	User     string `toml:"username"`
+	Password string `toml:"password"`
+	Schema   string `toml:"schema_name"`
 }
 
 // Config holds both database and steam credentials
@@ -115,15 +115,15 @@ func main() {
 	}
 
 	db, err := sql.Open("mysql",
-		config.Database.UserName+
+		config.Database.User+
 			":"+
 			config.Database.Password+
 			"@tcp("+
-			config.Database.HostName+
+			config.Database.Host+
 			":"+
 			config.Database.Port+
 			")/"+
-			config.Database.SchemaName)
+			config.Database.Schema)
 	if err != nil {
 		log.Fatalln(err)
 	}
