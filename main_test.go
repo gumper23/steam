@@ -288,18 +288,18 @@ func TestGetCurrentTimestamp(t *testing.T) {
 	defer db.Close()
 
 	ctx := context.Background()
-	expectedTime := "2024-01-15 10:30:00"
+	expectedDate := "2024-01-15"
 
 	t.Run("successful query", func(t *testing.T) {
-		rows := sqlmock.NewRows([]string{"created"}).AddRow(expectedTime)
-		mock.ExpectQuery("select current_timestamp\\(\\) as created").WillReturnRows(rows)
+		rows := sqlmock.NewRows([]string{"created"}).AddRow(expectedDate)
+		mock.ExpectQuery("select curdate\\(\\) as created").WillReturnRows(rows)
 
 		result, err := getCurrentTimestamp(ctx, db)
 		if err != nil {
 			t.Errorf("getCurrentTimestamp() unexpected error: %v", err)
 		}
-		if result != expectedTime {
-			t.Errorf("getCurrentTimestamp() = %v, want %v", result, expectedTime)
+		if result != expectedDate {
+			t.Errorf("getCurrentTimestamp() = %v, want %v", result, expectedDate)
 		}
 
 		if err := mock.ExpectationsWereMet(); err != nil {
@@ -308,7 +308,7 @@ func TestGetCurrentTimestamp(t *testing.T) {
 	})
 
 	t.Run("query error", func(t *testing.T) {
-		mock.ExpectQuery("select current_timestamp\\(\\) as created").
+		mock.ExpectQuery("select curdate\\(\\) as created").
 			WillReturnError(sql.ErrConnDone)
 
 		_, err := getCurrentTimestamp(ctx, db)
