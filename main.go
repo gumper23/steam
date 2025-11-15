@@ -18,38 +18,6 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 )
 
-/*
-mysql -h 127.0.0.1 -P13306 steam -BNe "show create table games\G" | tr '[:upper:]' '[:lower:]' | sed 1,2d | sed 's/`//g' | sed 's/^  /    /g' | sed 's/auto_increment=[0-9]* //g'
-
-create table if not exists games (
-    id int(10) unsigned not null auto_increment,
-    app_id int(10) unsigned not null,
-    has_community_visible_stats tinyint(3) unsigned not null,
-    img_icon_url varchar(255) character set utf8mb4 collate utf8mb4_unicode_ci not null,
-    img_logo_url varchar(255) character set utf8mb4 collate utf8mb4_unicode_ci not null,
-    name varchar(255) character set utf8mb4 collate utf8mb4_unicode_ci not null,
-    playtime_2weeks int(10) unsigned not null default '0',
-    playtime_forever int(10) unsigned not null default '0',
-    playtime_linux_forever int(10) unsigned not null default '0',
-    playtime_mac_forever int(10) unsigned not null default '0',
-    playtime_windows_forever int(10) unsigned not null default '0',
-    created_at date not null,
-    primary key (id),
-    unique key app_id (app_id),
-    key name (name(20)),
-    key playtime_forever (playtime_forever),
-    key created_at (created_at)
-) engine=innodb default charset=utf8mb4 collate=utf8mb4_unicode_ci;
-
-insert into games(id, app_id, has_community_visible_stats, img_icon_url, img_logo_url, name, playtime_forever, created_at)
-select id, app_id, has_community_visible_stats, img_icon_url, img_logo_url, name, playtime_forever, created_at from game g;
-
-insert into games(id, app_id, has_community_visible_stats, img_icon_url, img_logo_url, name, playtime_forever, created_at)
-select id, app_id, has_community_visible_stats, img_icon_url, img_logo_url, name, playtime_forever, created_at from game g
-where not exists (select 1 from games gs where g.app_id = gs.app_id)
-*/
-
-// mysql -h 127.0.0.1 -P13306 steam -BNe "show create table game\G" | grep -o '^[[:blank:]]*`.*`' | sed 's/^[[:blank:]]*//g' | sed 's/`//g' | paste -s -d, - | sed 's/,/, /g'
 // mysql -h 127.0.0.1 -P13306 steam -BNe "show create table game\G" | grep -o '^[[:blank:]]*`.*`' | sed 's/^[[:blank:]]*//g' | sed 's/`//g' | paste -s -d, - | sed 's/,/\n, /g'
 
 const (

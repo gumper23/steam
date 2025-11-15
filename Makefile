@@ -1,9 +1,11 @@
-.PHONY: help build test test-verbose test-race test-cover clean tidy fmt vet run
+.PHONY: help build build-linux build-all test test-verbose test-race test-cover clean tidy fmt vet run
 
 # Default target
 help:
 	@echo "Available targets:"
-	@echo "  build         - Build the application binary"
+	@echo "  build         - Build the application binary for current platform"
+	@echo "  build-linux   - Build the application binary for Linux AMD64"
+	@echo "  build-all     - Build binaries for both macOS and Linux"
 	@echo "  test          - Run unit tests"
 	@echo "  test-verbose  - Run unit tests with verbose output"
 	@echo "  test-race     - Run unit tests with race detection"
@@ -15,9 +17,16 @@ help:
 	@echo "  run           - Build and run the application"
 	@echo "  all           - Run fmt, vet, tidy, and test"
 
-# Build the application
+# Build the application for current platform
 build:
 	go build -o steam main.go
+
+# Build the application for Linux AMD64
+build-linux:
+	GOOS=linux GOARCH=amd64 go build -o steam-linux main.go
+
+# Build for both platforms
+build-all: build build-linux
 
 # Run unit tests
 test:
@@ -50,7 +59,7 @@ vet:
 
 # Clean build artifacts
 clean:
-	rm -f steam
+	rm -f steam steam-linux
 	rm -f coverage.out
 
 # Build and run

@@ -27,10 +27,16 @@ cd steam
 # Install dependencies
 go mod download
 
-# Build
+# Build for current platform (macOS)
 go build -o steam main.go
 # or
 make build
+
+# Build for Linux (cross-compile from macOS)
+make build-linux
+
+# Build for both platforms
+make build-all
 ```
 
 ## Setup
@@ -54,14 +60,16 @@ id = "your_steam_id"
 
 ### 2. Create Database Tables
 
-Run the migration to create required tables:
+Run the migration to create both required tables:
 
 ```bash
-# Create the playtime_snapshots table
+# Create the games and playtime_snapshots tables
 mysql -h localhost -u your_user -p steam < migrations/001_create_playtime_snapshots.sql
 ```
 
-The `games` table schema is documented in the comments at the top of `main.go`.
+This creates:
+- **games** table - stores your game library
+- **playtime_snapshots** table - stores historical playtime data
 
 ### 3. Set Up Cron (Optional but Recommended)
 
@@ -163,6 +171,29 @@ make tidy
 
 # Run all checks
 make all
+```
+
+### Cross-Platform Building
+
+The Makefile supports building for both macOS and Linux:
+
+```bash
+# Build for current platform
+make build
+
+# Build for Linux AMD64 (from macOS)
+make build-linux
+
+# Build both binaries
+make build-all
+
+# Output: steam (macOS) and steam-linux (Linux AMD64)
+```
+
+Transfer the Linux binary to your Ubuntu server:
+```bash
+scp steam-linux user@your-server:/path/to/steam
+ssh user@your-server 'chmod +x /path/to/steam'
 ```
 
 ## How It Works

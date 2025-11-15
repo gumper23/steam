@@ -44,9 +44,16 @@ This is a Steam library tracking application that syncs game ownership and playt
 
 **Build:**
 ```bash
+# Build for current platform (macOS)
 go build -o steam main.go
 # Or use Make
 make build
+
+# Build for Linux AMD64 (cross-compile)
+make build-linux
+
+# Build for both platforms
+make build-all
 ```
 
 **Run in sync mode (default):**
@@ -86,11 +93,17 @@ go test -v -run TestSyncGames
 
 **Other Make targets:**
 ```bash
-make tidy     # Run go mod tidy
-make fmt      # Format code
-make vet      # Run go vet
-make all      # Run fmt, vet, tidy, and test
+make build-linux  # Build for Linux AMD64 (outputs steam-linux)
+make build-all    # Build for both macOS and Linux
+make tidy         # Run go mod tidy
+make fmt          # Format code
+make vet          # Run go vet
+make clean        # Remove binaries (steam, steam-linux) and coverage files
+make all          # Run fmt, vet, tidy, and test
 ```
+
+**Cross-Compilation:**
+The app is developed on macOS but runs on Ubuntu. Use `make build-linux` to cross-compile for Linux AMD64 without needing a Linux build environment.
 
 **Install dependencies:**
 ```bash
@@ -119,10 +132,12 @@ All configuration fields are required and validated at startup via `Config.Valid
 ## Database Schema
 
 **Setup:**
-Before using the report functionality, run the migration:
+Run the migration to create both required tables:
 ```bash
 mysql -h <host> -u <user> -p <database> < migrations/001_create_playtime_snapshots.sql
 ```
+
+This single migration creates both the `games` and `playtime_snapshots` tables in the correct order.
 
 **Tables:**
 
@@ -141,7 +156,13 @@ mysql -h <host> -u <user> -p <database> < migrations/001_create_playtime_snapsho
    - Indexes on `(app_id, snapshot_date)` and `snapshot_date` for efficient queries
    - Snapshots are only recorded when playtime delta >= 5 minutes
 
-See `main.go` (top comment) for full `games` schema and `migrations/001_create_playtime_snapshots.sql` for snapshots table.
+**Migration Notes:**
+- All SQL keywords are lowercase for consistency
+- No integer display widths (uses `int` not `int(10)`)
+- `games` table created first, then `playtime_snapshots`
+- Safe to run multiple times (uses `create table if not exists`)
+
+See `migrations/001_create_playtime_snapshots.sql` for the complete schema.
 
 ## Testing Strategy
 
