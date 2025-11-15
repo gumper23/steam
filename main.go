@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"log/slog"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	_ "github.com/go-sql-driver/mysql"
+	flag "github.com/spf13/pflag"
 )
 
 // mysql -h 127.0.0.1 -P13306 steam -BNe "show create table game\G" | grep -o '^[[:blank:]]*`.*`' | sed 's/^[[:blank:]]*//g' | sed 's/`//g' | paste -s -d, - | sed 's/,/\n, /g'
@@ -103,6 +103,7 @@ type PlayReport struct {
 	TotalHours   float64
 	GamesPlayed  int
 	TopGames     []GamePlaySummary
+	RecentGames  []GamePlaySummary
 }
 
 // Validate checks that all required configuration fields are populated
@@ -428,9 +429,62 @@ func getGamesPlayedInRange(ctx context.Context, db *sql.DB, startDate, endDate t
 	return games, nil
 }
 
+// getRecentlyPlayedGames retrieves the most recently played games (by last_played date)
+func getRecentlyPlayedGames(ctx context.Context, db *sql.DB, startDate, endDate time.Time, limit int) ([]GamePlaySummary, error) {
+	query := `
+		SELECT
+			s.app_id,
+			g.name,
+			SUM(s.playtime_delta) as total_minutes,
+			MIN(s.snapshot_date) as first_played,
+			MAX(s.snapshot_date) as last_played,
+			COUNT(*) as session_count
+		FROM playtime_snapshots s
+		JOIN games g ON s.app_id = g.app_id
+		WHERE s.snapshot_date >= ? AND s.snapshot_date <= ?
+		GROUP BY s.app_id, g.name
+		HAVING total_minutes > 0
+		ORDER BY last_played DESC
+		LIMIT ?`
+
+	rows, err := db.QueryContext(ctx, query, startDate, endDate, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query recent games: %w", err)
+	}
+	defer rows.Close()
+
+	var games []GamePlaySummary
+	for rows.Next() {
+		var game GamePlaySummary
+		if err := rows.Scan(
+			&game.AppID,
+			&game.Name,
+			&game.MinutesPlayed,
+			&game.FirstPlayed,
+			&game.LastPlayed,
+			&game.SessionCount,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan recent game: %w", err)
+		}
+		game.HoursPlayed = float64(game.MinutesPlayed) / 60.0
+		games = append(games, game)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating recent games: %w", err)
+	}
+
+	return games, nil
+}
+
 // generatePlayReport creates a complete play report for the given time period
 func generatePlayReport(ctx context.Context, db *sql.DB, startDate, endDate time.Time) (*PlayReport, error) {
 	games, err := getGamesPlayedInRange(ctx, db, startDate, endDate)
+	if err != nil {
+		return nil, err
+	}
+
+	recentGames, err := getRecentlyPlayedGames(ctx, db, startDate, endDate, 5)
 	if err != nil {
 		return nil, err
 	}
@@ -446,7 +500,8 @@ func generatePlayReport(ctx context.Context, db *sql.DB, startDate, endDate time
 		TotalMinutes: totalMinutes,
 		TotalHours:   float64(totalMinutes) / 60.0,
 		GamesPlayed:  len(games),
-		TopGames:     games, // Already sorted by playtime DESC
+		TopGames:     games,       // Sorted by playtime DESC
+		RecentGames:  recentGames, // Sorted by last_played DESC
 	}
 
 	return report, nil
@@ -461,6 +516,20 @@ func formatReportText(report *PlayReport) string {
 
 	output += fmt.Sprintf("Total Gaming Time: %d minutes (%.1f hours)\n", report.TotalMinutes, report.TotalHours)
 	output += fmt.Sprintf("Games Played: %d\n\n", report.GamesPlayed)
+
+	// Show recently played games first
+	if len(report.RecentGames) > 0 {
+		output += "Recently Played (Last 5):\n"
+		for i, game := range report.RecentGames {
+			output += fmt.Sprintf("  %d. %-40s %5d min (%5.1f hrs)  Last: %s\n",
+				i+1,
+				truncateString(game.Name, 40),
+				game.MinutesPlayed,
+				game.HoursPlayed,
+				game.LastPlayed.Local().Format("Jan 02 15:04"))
+		}
+		output += "\n"
+	}
 
 	if len(report.TopGames) > 0 {
 		output += "Top Games by Playtime:\n"
@@ -502,6 +571,20 @@ func formatReportMarkdown(report *PlayReport) string {
 
 	output += fmt.Sprintf("**Total Gaming Time:** %.1f hours (%d minutes)\n\n", report.TotalHours, report.TotalMinutes)
 	output += fmt.Sprintf("**Games Played:** %d\n\n", report.GamesPlayed)
+
+	if len(report.RecentGames) > 0 {
+		output += "## Recently Played (Last 5)\n\n"
+		output += "| Game | Time Played | Last Played |\n"
+		output += "|------|-------------|-------------|\n"
+
+		for _, game := range report.RecentGames {
+			output += fmt.Sprintf("| %s | %.1f hrs | %s |\n",
+				game.Name,
+				game.HoursPlayed,
+				game.LastPlayed.Local().Format("Jan 02 15:04"))
+		}
+		output += "\n"
+	}
 
 	if len(report.TopGames) > 0 {
 		output += "## Top Games\n\n"
@@ -615,11 +698,11 @@ func run(ctx context.Context, logger *slog.Logger) error {
 
 func main() {
 	// Parse command-line flags
-	reportMode := flag.Bool("report", false, "Generate a gaming report instead of syncing")
-	startDateStr := flag.String("start", "", "Report start date (YYYY-MM-DD)")
-	endDateStr := flag.String("end", "", "Report end date (YYYY-MM-DD)")
-	yearToDate := flag.Bool("ytd", true, "Year-to-date report (default)")
-	reportFormat := flag.String("format", "text", "Report format: text, json, or markdown")
+	reportMode := flag.BoolP("report", "r", false, "Generate a gaming report instead of syncing")
+	startDateStr := flag.StringP("start", "s", "", "Report start date (YYYY-MM-DD)")
+	endDateStr := flag.StringP("end", "e", "", "Report end date (YYYY-MM-DD)")
+	yearToDate := flag.BoolP("ytd", "y", true, "Year-to-date report (default)")
+	reportFormat := flag.StringP("format", "f", "text", "Report format: text, json, or markdown")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{

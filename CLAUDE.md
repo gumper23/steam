@@ -31,7 +31,10 @@ This is a Steam library tracking application that syncs game ownership and playt
 2. Parse date range (year-to-date by default, or custom range)
 3. Query `playtime_snapshots` table for activity in date range
 4. Aggregate playtime deltas by game
-5. Format and output report (text, JSON, or Markdown)
+5. Generate two lists:
+   - Recently played games (last 5, sorted by most recent activity)
+   - Top games by total playtime (top 20, sorted by playtime descending)
+6. Format and output report (text, JSON, or Markdown)
 
 **Key Design Patterns:**
 - Context-based operations throughout (all DB/HTTP calls accept `context.Context`)
@@ -39,6 +42,12 @@ This is a Steam library tracking application that syncs game ownership and playt
 - Parameterized SQL queries to prevent injection
 - Error wrapping with `fmt.Errorf` and `%w` for error chains
 - Table-driven tests using `sqlmock` for database operations
+
+**Dependencies:**
+- `github.com/BurntSushi/toml` - TOML configuration file parsing
+- `github.com/go-sql-driver/mysql` - MySQL database driver
+- `github.com/spf13/pflag` - POSIX/GNU-style command-line flags (drop-in replacement for stdlib `flag`)
+- `github.com/DATA-DOG/go-sqlmock` - Database mocking for tests (dev dependency)
 
 ## Development Commands
 
@@ -65,15 +74,26 @@ make build-all
 ```bash
 # Year-to-date report (default)
 ./steam --report
+# or using shorthand
+./steam -r
 
 # Custom date range
 ./steam --report --start 2024-01-01 --end 2024-12-31
+# or using shorthand
+./steam -r -s 2024-01-01 -e 2024-12-31
 
 # Different formats
-./steam --report --format json
-./steam --report --format markdown
-./steam --report --format text
+./steam --report --format json     # or -f json
+./steam --report --format markdown # or -f markdown
+./steam --report --format text     # or -f text
 ```
+
+**Available flags (uses pflag for POSIX/GNU-style flags):**
+- `-r, --report` - Generate a gaming report instead of syncing
+- `-s, --start` - Report start date (YYYY-MM-DD)
+- `-e, --end` - Report end date (YYYY-MM-DD)
+- `-y, --ytd` - Year-to-date report (default: true)
+- `-f, --format` - Report format: text, json, or markdown (default: text)
 
 **Run tests:**
 ```bash
@@ -218,8 +238,10 @@ See `migrations/001_create_playtime_snapshots.sql` for the complete schema.
 
 **Report Generation:**
 - Default mode is year-to-date (Jan 1 to current date)
-- Custom ranges supported via `--start` and `--end` flags
-- Reports show top 20 games by playtime
-- Three output formats: text (default), JSON, and Markdown
+- Custom ranges supported via `--start` and `--end` flags (or `-s` and `-e` shorthand)
+- Reports include two sections:
+  - **Recently Played (Last 5)**: Games sorted by most recent activity (`ORDER BY last_played DESC`)
+  - **Top Games by Playtime**: Top 20 games sorted by total playtime descending
+- Three output formats: text (default), JSON, and Markdown (use `--format` or `-f`)
 - Queries use `SUM(playtime_delta)` to calculate total play time in range
-- Games are sorted by total playtime descending
+- All queries aggregate by game and include session counts
