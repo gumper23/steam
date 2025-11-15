@@ -701,7 +701,10 @@ func main() {
 	reportMode := flag.BoolP("report", "r", false, "Generate a gaming report instead of syncing")
 	startDateStr := flag.StringP("start", "s", "", "Report start date (YYYY-MM-DD)")
 	endDateStr := flag.StringP("end", "e", "", "Report end date (YYYY-MM-DD)")
-	yearToDate := flag.BoolP("ytd", "y", true, "Year-to-date report (default)")
+	yearToDate := flag.BoolP("ytd", "y", false, "Year-to-date report (Jan 1 to now)")
+	lastWeek := flag.BoolP("last-week", "w", false, "Report for last 7 days")
+	lastMonth := flag.BoolP("last-month", "m", false, "Report for last 30 days")
+	lastYear := flag.BoolP("last-year", "l", false, "Report for last 365 days")
 	reportFormat := flag.StringP("format", "f", "text", "Report format: text, json, or markdown")
 	flag.Parse()
 
@@ -729,6 +732,31 @@ func main() {
 
 		// Determine date range
 		var startDate, endDate time.Time
+		now := time.Now().UTC()
+
+		// Check how many date range options are set
+		optionsSet := 0
+		if *startDateStr != "" || *endDateStr != "" {
+			optionsSet++
+		}
+		if *yearToDate {
+			optionsSet++
+		}
+		if *lastWeek {
+			optionsSet++
+		}
+		if *lastMonth {
+			optionsSet++
+		}
+		if *lastYear {
+			optionsSet++
+		}
+
+		if optionsSet > 1 {
+			logger.Error("cannot specify multiple date range options (--ytd, --last-week, --last-month, --last-year, or --start/--end)")
+			os.Exit(1)
+		}
+
 		if *startDateStr != "" && *endDateStr != "" {
 			// Custom date range - parse in UTC for consistency with database
 			startDate, err = time.ParseInLocation("2006-01-02", *startDateStr, time.UTC)
@@ -743,14 +771,25 @@ func main() {
 			}
 			// Set end date to end of day (UTC)
 			endDate = endDate.Add(23*time.Hour + 59*time.Minute + 59*time.Second)
-		} else if *yearToDate {
-			// Year-to-date (default) - use UTC for consistency with database
-			now := time.Now().UTC()
-			startDate = time.Date(now.Year(), 1, 1, 0, 0, 0, 0, time.UTC)
+		} else if *startDateStr != "" || *endDateStr != "" {
+			logger.Error("must specify both --start and --end dates")
+			os.Exit(1)
+		} else if *lastWeek {
+			// Last 7 days
+			startDate = now.AddDate(0, 0, -7)
+			endDate = now
+		} else if *lastMonth {
+			// Last 30 days
+			startDate = now.AddDate(0, 0, -30)
+			endDate = now
+		} else if *lastYear {
+			// Last 365 days
+			startDate = now.AddDate(0, 0, -365)
 			endDate = now
 		} else {
-			logger.Error("must specify either --ytd or both --start and --end dates")
-			os.Exit(1)
+			// Default to year-to-date if no option specified
+			startDate = time.Date(now.Year(), 1, 1, 0, 0, 0, 0, time.UTC)
+			endDate = now
 		}
 
 		if err := runReport(ctx, db, startDate, endDate, *reportFormat, logger); err != nil {

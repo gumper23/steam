@@ -72,10 +72,22 @@ make build-all
 
 **Run in report mode:**
 ```bash
-# Year-to-date report (default)
+# Year-to-date report (default - Jan 1 to now)
 ./steam --report
 # or using shorthand
 ./steam -r
+
+# Last 7 days
+./steam -r -w
+./steam --report --last-week
+
+# Last 30 days
+./steam -r -m
+./steam --report --last-month
+
+# Last 365 days
+./steam -r -l
+./steam --report --last-year
 
 # Custom date range
 ./steam --report --start 2024-01-01 --end 2024-12-31
@@ -86,14 +98,23 @@ make build-all
 ./steam --report --format json     # or -f json
 ./steam --report --format markdown # or -f markdown
 ./steam --report --format text     # or -f text
+
+# Combine convenience flags
+./steam -r -w -f json  # Last week in JSON format
+./steam -r -m -f markdown  # Last month in Markdown format
 ```
 
 **Available flags (uses pflag for POSIX/GNU-style flags):**
 - `-r, --report` - Generate a gaming report instead of syncing
-- `-s, --start` - Report start date (YYYY-MM-DD)
-- `-e, --end` - Report end date (YYYY-MM-DD)
-- `-y, --ytd` - Year-to-date report (default: true)
+- `-w, --last-week` - Report for last 7 days
+- `-m, --last-month` - Report for last 30 days
+- `-l, --last-year` - Report for last 365 days
+- `-y, --ytd` - Year-to-date report (Jan 1 to now)
+- `-s, --start` - Report start date (YYYY-MM-DD, requires --end)
+- `-e, --end` - Report end date (YYYY-MM-DD, requires --start)
 - `-f, --format` - Report format: text, json, or markdown (default: text)
+
+**Note:** Date range options are mutually exclusive. Use only one of: `--ytd`, `--last-week`, `--last-month`, `--last-year`, or `--start`/`--end`.
 
 **Run tests:**
 ```bash
