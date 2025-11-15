@@ -586,3 +586,402 @@ func newTestLogger(t *testing.T) *slog.Logger {
 		Level: slog.LevelError, // Only show errors during tests
 	}))
 }
+
+func TestGetLastSnapshot(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("Failed to create mock db: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+
+	t.Run("snapshot exists", func(t *testing.T) {
+		expectedDate := time.Now()
+		rows := sqlmock.NewRows([]string{"id", "app_id", "playtime_total", "playtime_delta", "snapshot_date"}).
+			AddRow(1, 100, 500, 50, expectedDate)
+
+		mock.ExpectQuery("SELECT id, app_id, playtime_total, playtime_delta, snapshot_date").
+			WithArgs(100).
+			WillReturnRows(rows)
+
+		snapshot, err := getLastSnapshot(ctx, db, 100)
+		if err != nil {
+			t.Errorf("getLastSnapshot() unexpected error: %v", err)
+		}
+		if snapshot == nil {
+			t.Fatal("getLastSnapshot() returned nil snapshot")
+		}
+		if snapshot.AppID != 100 {
+			t.Errorf("snapshot.AppID = %d, want 100", snapshot.AppID)
+		}
+		if snapshot.PlaytimeTotal != 500 {
+			t.Errorf("snapshot.PlaytimeTotal = %d, want 500", snapshot.PlaytimeTotal)
+		}
+		if snapshot.PlaytimeDelta != 50 {
+			t.Errorf("snapshot.PlaytimeDelta = %d, want 50", snapshot.PlaytimeDelta)
+		}
+
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unfulfilled expectations: %v", err)
+		}
+	})
+
+	t.Run("no snapshot exists", func(t *testing.T) {
+		mock.ExpectQuery("SELECT id, app_id, playtime_total, playtime_delta, snapshot_date").
+			WithArgs(200).
+			WillReturnError(sql.ErrNoRows)
+
+		snapshot, err := getLastSnapshot(ctx, db, 200)
+		if err != nil {
+			t.Errorf("getLastSnapshot() unexpected error: %v", err)
+		}
+		if snapshot != nil {
+			t.Errorf("getLastSnapshot() expected nil, got %v", snapshot)
+		}
+	})
+
+	t.Run("database error", func(t *testing.T) {
+		mock.ExpectQuery("SELECT id, app_id, playtime_total, playtime_delta, snapshot_date").
+			WithArgs(300).
+			WillReturnError(sql.ErrConnDone)
+
+		_, err := getLastSnapshot(ctx, db, 300)
+		if err == nil {
+			t.Error("getLastSnapshot() expected error, got nil")
+		}
+	})
+}
+
+func TestRecordPlaytimeSnapshot(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("Failed to create mock db: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	snapshotTime := time.Now()
+
+	t.Run("successful insert", func(t *testing.T) {
+		mock.ExpectExec("INSERT INTO playtime_snapshots").
+			WithArgs(100, 500, 50, sqlmock.AnyArg()).
+			WillReturnResult(sqlmock.NewResult(1, 1))
+
+		err := recordPlaytimeSnapshot(ctx, db, 100, 500, 50, snapshotTime)
+		if err != nil {
+			t.Errorf("recordPlaytimeSnapshot() unexpected error: %v", err)
+		}
+
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unfulfilled expectations: %v", err)
+		}
+	})
+
+	t.Run("insert error", func(t *testing.T) {
+		mock.ExpectExec("INSERT INTO playtime_snapshots").
+			WithArgs(100, 500, 50, sqlmock.AnyArg()).
+			WillReturnError(sql.ErrConnDone)
+
+		err := recordPlaytimeSnapshot(ctx, db, 100, 500, 50, snapshotTime)
+		if err == nil {
+			t.Error("recordPlaytimeSnapshot() expected error, got nil")
+		}
+	})
+}
+
+func TestGetGamesPlayedInRange(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("Failed to create mock db: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 12, 31, 23, 59, 59, 0, time.UTC)
+
+	t.Run("successful query", func(t *testing.T) {
+		firstPlayed := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+		lastPlayed := time.Date(2024, 12, 20, 22, 0, 0, 0, time.UTC)
+
+		rows := sqlmock.NewRows([]string{"app_id", "name", "total_minutes", "first_played", "last_played", "session_count"}).
+			AddRow(100, "Game 1", 1850, firstPlayed, lastPlayed, 145).
+			AddRow(200, "Game 2", 1420, firstPlayed, lastPlayed, 98)
+
+		mock.ExpectQuery("SELECT(.+)FROM playtime_snapshots").
+			WithArgs(startDate, endDate).
+			WillReturnRows(rows)
+
+		games, err := getGamesPlayedInRange(ctx, db, startDate, endDate)
+		if err != nil {
+			t.Errorf("getGamesPlayedInRange() unexpected error: %v", err)
+		}
+
+		if len(games) != 2 {
+			t.Fatalf("getGamesPlayedInRange() returned %d games, want 2", len(games))
+		}
+
+		if games[0].AppID != 100 {
+			t.Errorf("games[0].AppID = %d, want 100", games[0].AppID)
+		}
+		if games[0].Name != "Game 1" {
+			t.Errorf("games[0].Name = %s, want Game 1", games[0].Name)
+		}
+		if games[0].MinutesPlayed != 1850 {
+			t.Errorf("games[0].MinutesPlayed = %d, want 1850", games[0].MinutesPlayed)
+		}
+		if games[0].HoursPlayed != 1850.0/60.0 {
+			t.Errorf("games[0].HoursPlayed = %f, want %f", games[0].HoursPlayed, 1850.0/60.0)
+		}
+
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unfulfilled expectations: %v", err)
+		}
+	})
+
+	t.Run("empty result", func(t *testing.T) {
+		rows := sqlmock.NewRows([]string{"app_id", "name", "total_minutes", "first_played", "last_played", "session_count"})
+
+		mock.ExpectQuery("SELECT(.+)FROM playtime_snapshots").
+			WithArgs(startDate, endDate).
+			WillReturnRows(rows)
+
+		games, err := getGamesPlayedInRange(ctx, db, startDate, endDate)
+		if err != nil {
+			t.Errorf("getGamesPlayedInRange() unexpected error: %v", err)
+		}
+
+		if len(games) != 0 {
+			t.Errorf("getGamesPlayedInRange() returned %d games, want 0", len(games))
+		}
+	})
+}
+
+func TestGeneratePlayReport(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("Failed to create mock db: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 12, 31, 23, 59, 59, 0, time.UTC)
+
+	firstPlayed := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+	lastPlayed := time.Date(2024, 12, 20, 22, 0, 0, 0, time.UTC)
+
+	rows := sqlmock.NewRows([]string{"app_id", "name", "total_minutes", "first_played", "last_played", "session_count"}).
+		AddRow(100, "Game 1", 1850, firstPlayed, lastPlayed, 145).
+		AddRow(200, "Game 2", 1420, firstPlayed, lastPlayed, 98)
+
+	mock.ExpectQuery("SELECT(.+)FROM playtime_snapshots").
+		WithArgs(startDate, endDate).
+		WillReturnRows(rows)
+
+	report, err := generatePlayReport(ctx, db, startDate, endDate)
+	if err != nil {
+		t.Errorf("generatePlayReport() unexpected error: %v", err)
+	}
+
+	if report == nil {
+		t.Fatal("generatePlayReport() returned nil report")
+	}
+
+	expectedMinutes := 1850 + 1420
+	if report.TotalMinutes != expectedMinutes {
+		t.Errorf("report.TotalMinutes = %d, want %d", report.TotalMinutes, expectedMinutes)
+	}
+
+	expectedHours := float64(expectedMinutes) / 60.0
+	if report.TotalHours != expectedHours {
+		t.Errorf("report.TotalHours = %f, want %f", report.TotalHours, expectedHours)
+	}
+
+	if report.GamesPlayed != 2 {
+		t.Errorf("report.GamesPlayed = %d, want 2", report.GamesPlayed)
+	}
+
+	if len(report.TopGames) != 2 {
+		t.Errorf("len(report.TopGames) = %d, want 2", len(report.TopGames))
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unfulfilled expectations: %v", err)
+	}
+}
+
+func TestFormatReportText(t *testing.T) {
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 12, 31, 23, 59, 59, 0, time.UTC)
+	firstPlayed := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+	lastPlayed := time.Date(2024, 12, 20, 22, 0, 0, 0, time.UTC)
+
+	report := &PlayReport{
+		StartDate:    startDate,
+		EndDate:      endDate,
+		TotalMinutes: 3270,
+		TotalHours:   54.5,
+		GamesPlayed:  2,
+		TopGames: []GamePlaySummary{
+			{
+				AppID:         100,
+				Name:          "Baldur's Gate 3",
+				MinutesPlayed: 1850,
+				HoursPlayed:   30.8,
+				FirstPlayed:   firstPlayed,
+				LastPlayed:    lastPlayed,
+				SessionCount:  145,
+			},
+			{
+				AppID:         200,
+				Name:          "Elden Ring",
+				MinutesPlayed: 1420,
+				HoursPlayed:   23.7,
+				FirstPlayed:   firstPlayed,
+				LastPlayed:    lastPlayed,
+				SessionCount:  98,
+			},
+		},
+	}
+
+	output := formatReportText(report)
+
+	// Check that output contains expected strings
+	if !contains(output, "Gaming Report: 2024-01-01 to 2024-12-31") {
+		t.Error("formatReportText() missing report title")
+	}
+	if !contains(output, "Total Gaming Time: 3270 minutes (54.5 hours)") {
+		t.Error("formatReportText() missing total gaming time")
+	}
+	if !contains(output, "Games Played: 2") {
+		t.Error("formatReportText() missing games played count")
+	}
+	if !contains(output, "Baldur's Gate 3") {
+		t.Error("formatReportText() missing game name")
+	}
+	if !contains(output, "Elden Ring") {
+		t.Error("formatReportText() missing game name")
+	}
+}
+
+func TestFormatReportJSON(t *testing.T) {
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 12, 31, 23, 59, 59, 0, time.UTC)
+
+	report := &PlayReport{
+		StartDate:    startDate,
+		EndDate:      endDate,
+		TotalMinutes: 3270,
+		TotalHours:   54.5,
+		GamesPlayed:  2,
+		TopGames:     []GamePlaySummary{},
+	}
+
+	output, err := formatReportJSON(report)
+	if err != nil {
+		t.Errorf("formatReportJSON() unexpected error: %v", err)
+	}
+
+	// Verify it's valid JSON by unmarshaling
+	var result PlayReport
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Errorf("formatReportJSON() produced invalid JSON: %v", err)
+	}
+
+	if result.TotalMinutes != 3270 {
+		t.Errorf("formatReportJSON() TotalMinutes = %d, want 3270", result.TotalMinutes)
+	}
+}
+
+func TestFormatReportMarkdown(t *testing.T) {
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 12, 31, 23, 59, 59, 0, time.UTC)
+	firstPlayed := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+	lastPlayed := time.Date(2024, 12, 20, 22, 0, 0, 0, time.UTC)
+
+	report := &PlayReport{
+		StartDate:    startDate,
+		EndDate:      endDate,
+		TotalMinutes: 3270,
+		TotalHours:   54.5,
+		GamesPlayed:  2,
+		TopGames: []GamePlaySummary{
+			{
+				AppID:         100,
+				Name:          "Baldur's Gate 3",
+				MinutesPlayed: 1850,
+				HoursPlayed:   30.8,
+				FirstPlayed:   firstPlayed,
+				LastPlayed:    lastPlayed,
+				SessionCount:  145,
+			},
+		},
+	}
+
+	output := formatReportMarkdown(report)
+
+	// Check Markdown formatting
+	if !contains(output, "# Gaming Report:") {
+		t.Error("formatReportMarkdown() missing markdown header")
+	}
+	if !contains(output, "## Top Games") {
+		t.Error("formatReportMarkdown() missing section header")
+	}
+	if !contains(output, "| Rank | Game | Time Played | Sessions | Period |") {
+		t.Error("formatReportMarkdown() missing table header")
+	}
+	if !contains(output, "Baldur's Gate 3") {
+		t.Error("formatReportMarkdown() missing game name")
+	}
+}
+
+func TestTruncateString(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		maxLen int
+		want   string
+	}{
+		{
+			name:   "shorter than max",
+			input:  "Hello",
+			maxLen: 10,
+			want:   "Hello",
+		},
+		{
+			name:   "exactly max length",
+			input:  "Hello World",
+			maxLen: 11,
+			want:   "Hello World",
+		},
+		{
+			name:   "longer than max",
+			input:  "Hello World This Is A Long String",
+			maxLen: 15,
+			want:   "Hello World ...",
+		},
+		{
+			name:   "very short max",
+			input:  "Hello",
+			maxLen: 3,
+			want:   "...",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := truncateString(tt.input, tt.maxLen)
+			if got != tt.want {
+				t.Errorf("truncateString() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// Helper function to check if a string contains a substring
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
+		(len(s) > 0 && (s[:len(substr)] == substr || contains(s[1:], substr))))
+}

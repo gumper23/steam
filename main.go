@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log/slog"
@@ -52,8 +53,9 @@ where not exists (select 1 from games gs where g.app_id = gs.app_id)
 // mysql -h 127.0.0.1 -P13306 steam -BNe "show create table game\G" | grep -o '^[[:blank:]]*`.*`' | sed 's/^[[:blank:]]*//g' | sed 's/`//g' | paste -s -d, - | sed 's/,/\n, /g'
 
 const (
-	httpTimeout      = 30 * time.Second
-	dbConnectTimeout = 10 * time.Second
+	httpTimeout          = 30 * time.Second
+	dbConnectTimeout     = 10 * time.Second
+	minPlaytimeThreshold = 5 // Minimum minutes to record a snapshot
 )
 
 // Game holds a steam owned game api game
@@ -103,6 +105,36 @@ type Config struct {
 type StoredGame struct {
 	Appid           int
 	PlaytimeForever int
+}
+
+// PlaytimeSnapshot represents a historical playtime record
+type PlaytimeSnapshot struct {
+	ID            int
+	AppID         int
+	PlaytimeTotal int
+	PlaytimeDelta int
+	SnapshotDate  time.Time
+}
+
+// GamePlaySummary holds aggregated play data for a game over a time period
+type GamePlaySummary struct {
+	AppID         int
+	Name          string
+	MinutesPlayed int
+	HoursPlayed   float64
+	FirstPlayed   time.Time
+	LastPlayed    time.Time
+	SessionCount  int
+}
+
+// PlayReport represents a complete gaming report for a time period
+type PlayReport struct {
+	StartDate    time.Time
+	EndDate      time.Time
+	TotalMinutes int
+	TotalHours   float64
+	GamesPlayed  int
+	TopGames     []GamePlaySummary
 }
 
 // Validate checks that all required configuration fields are populated
@@ -293,9 +325,52 @@ values
 	return nil
 }
 
+// getLastSnapshot retrieves the most recent snapshot for a given app_id
+func getLastSnapshot(ctx context.Context, db *sql.DB, appid int) (*PlaytimeSnapshot, error) {
+	query := `
+		SELECT id, app_id, playtime_total, playtime_delta, snapshot_date
+		FROM playtime_snapshots
+		WHERE app_id = ?
+		ORDER BY snapshot_date DESC
+		LIMIT 1`
+
+	var snapshot PlaytimeSnapshot
+	err := db.QueryRowContext(ctx, query, appid).Scan(
+		&snapshot.ID,
+		&snapshot.AppID,
+		&snapshot.PlaytimeTotal,
+		&snapshot.PlaytimeDelta,
+		&snapshot.SnapshotDate,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, nil // No snapshot exists yet
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get last snapshot for app %d: %w", appid, err)
+	}
+
+	return &snapshot, nil
+}
+
+// recordPlaytimeSnapshot inserts a new playtime snapshot
+func recordPlaytimeSnapshot(ctx context.Context, db *sql.DB, appid, playtimeTotal, playtimeDelta int, snapshotDate time.Time) error {
+	query := `
+		INSERT INTO playtime_snapshots (app_id, playtime_total, playtime_delta, snapshot_date)
+		VALUES (?, ?, ?, ?)`
+
+	_, err := db.ExecContext(ctx, query, appid, playtimeTotal, playtimeDelta, snapshotDate)
+	if err != nil {
+		return fmt.Errorf("failed to record snapshot for app %d: %w", appid, err)
+	}
+
+	return nil
+}
+
 // syncGames synchronizes the local database with games from the Steam API
 func syncGames(ctx context.Context, db *sql.DB, ogs *OwnedGames, storedGames map[int]int, created string, logger *slog.Logger) (int, int, int, error) {
 	var updated, inserted, played int
+	snapshotTime := time.Now()
 
 	for _, game := range ogs.Response.Games {
 		if game.PlaytimeForever != 0 {
@@ -308,16 +383,218 @@ func syncGames(ctx context.Context, db *sql.DB, ogs *OwnedGames, storedGames map
 					return updated, inserted, played, err
 				}
 				updated++
+
+				// Record snapshot if delta meets threshold
+				delta := game.PlaytimeForever - playtime
+				if delta >= minPlaytimeThreshold {
+					if err := recordPlaytimeSnapshot(ctx, db, game.Appid, game.PlaytimeForever, delta, snapshotTime); err != nil {
+						logger.Warn("failed to record snapshot",
+							"app_id", game.Appid,
+							"error", err)
+					}
+				}
 			}
 		} else {
 			if err := insertGame(ctx, db, game, created); err != nil {
 				return updated, inserted, played, err
 			}
 			inserted++
+
+			// Record initial snapshot if game has playtime and meets threshold
+			if game.PlaytimeForever >= minPlaytimeThreshold {
+				if err := recordPlaytimeSnapshot(ctx, db, game.Appid, game.PlaytimeForever, game.PlaytimeForever, snapshotTime); err != nil {
+					logger.Warn("failed to record initial snapshot",
+						"app_id", game.Appid,
+						"error", err)
+				}
+			}
 		}
 	}
 
 	return updated, inserted, played, nil
+}
+
+// getGamesPlayedInRange retrieves all games with activity in the specified date range
+func getGamesPlayedInRange(ctx context.Context, db *sql.DB, startDate, endDate time.Time) ([]GamePlaySummary, error) {
+	query := `
+		SELECT
+			s.app_id,
+			g.name,
+			SUM(s.playtime_delta) as total_minutes,
+			MIN(s.snapshot_date) as first_played,
+			MAX(s.snapshot_date) as last_played,
+			COUNT(*) as session_count
+		FROM playtime_snapshots s
+		JOIN games g ON s.app_id = g.app_id
+		WHERE s.snapshot_date >= ? AND s.snapshot_date <= ?
+		GROUP BY s.app_id, g.name
+		HAVING total_minutes > 0
+		ORDER BY total_minutes DESC`
+
+	rows, err := db.QueryContext(ctx, query, startDate, endDate)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query games in range: %w", err)
+	}
+	defer rows.Close()
+
+	var games []GamePlaySummary
+	for rows.Next() {
+		var game GamePlaySummary
+		if err := rows.Scan(
+			&game.AppID,
+			&game.Name,
+			&game.MinutesPlayed,
+			&game.FirstPlayed,
+			&game.LastPlayed,
+			&game.SessionCount,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan game summary: %w", err)
+		}
+		game.HoursPlayed = float64(game.MinutesPlayed) / 60.0
+		games = append(games, game)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating game summaries: %w", err)
+	}
+
+	return games, nil
+}
+
+// generatePlayReport creates a complete play report for the given time period
+func generatePlayReport(ctx context.Context, db *sql.DB, startDate, endDate time.Time) (*PlayReport, error) {
+	games, err := getGamesPlayedInRange(ctx, db, startDate, endDate)
+	if err != nil {
+		return nil, err
+	}
+
+	totalMinutes := 0
+	for _, game := range games {
+		totalMinutes += game.MinutesPlayed
+	}
+
+	report := &PlayReport{
+		StartDate:    startDate,
+		EndDate:      endDate,
+		TotalMinutes: totalMinutes,
+		TotalHours:   float64(totalMinutes) / 60.0,
+		GamesPlayed:  len(games),
+		TopGames:     games, // Already sorted by playtime DESC
+	}
+
+	return report, nil
+}
+
+// formatReportText formats a report as human-readable text
+func formatReportText(report *PlayReport) string {
+	var output string
+	output += fmt.Sprintf("=== Gaming Report: %s to %s ===\n\n",
+		report.StartDate.Format("2006-01-02"),
+		report.EndDate.Format("2006-01-02"))
+
+	output += fmt.Sprintf("Total Gaming Time: %d minutes (%.1f hours)\n", report.TotalMinutes, report.TotalHours)
+	output += fmt.Sprintf("Games Played: %d\n\n", report.GamesPlayed)
+
+	if len(report.TopGames) > 0 {
+		output += "Top Games by Playtime:\n"
+		for i, game := range report.TopGames {
+			if i >= 20 { // Show top 20
+				break
+			}
+			output += fmt.Sprintf("  %2d. %-40s %5d min (%5.1f hrs)  [%s - %s]  (%d sessions)\n",
+				i+1,
+				truncateString(game.Name, 40),
+				game.MinutesPlayed,
+				game.HoursPlayed,
+				game.FirstPlayed.Format("Jan 02"),
+				game.LastPlayed.Format("Jan 02"),
+				game.SessionCount)
+		}
+	} else {
+		output += "No games played in this period.\n"
+	}
+
+	return output
+}
+
+// formatReportJSON formats a report as JSON
+func formatReportJSON(report *PlayReport) (string, error) {
+	data, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal report to JSON: %w", err)
+	}
+	return string(data), nil
+}
+
+// formatReportMarkdown formats a report as Markdown
+func formatReportMarkdown(report *PlayReport) string {
+	var output string
+	output += fmt.Sprintf("# Gaming Report: %s to %s\n\n",
+		report.StartDate.Format("January 2, 2006"),
+		report.EndDate.Format("January 2, 2006"))
+
+	output += fmt.Sprintf("**Total Gaming Time:** %.1f hours (%d minutes)\n\n", report.TotalHours, report.TotalMinutes)
+	output += fmt.Sprintf("**Games Played:** %d\n\n", report.GamesPlayed)
+
+	if len(report.TopGames) > 0 {
+		output += "## Top Games\n\n"
+		output += "| Rank | Game | Time Played | Sessions | Period |\n"
+		output += "|------|------|-------------|----------|--------|\n"
+
+		for i, game := range report.TopGames {
+			if i >= 20 { // Show top 20
+				break
+			}
+			output += fmt.Sprintf("| %d | %s | %.1f hrs | %d | %s - %s |\n",
+				i+1,
+				game.Name,
+				game.HoursPlayed,
+				game.SessionCount,
+				game.FirstPlayed.Format("Jan 02"),
+				game.LastPlayed.Format("Jan 02"))
+		}
+	} else {
+		output += "No games played in this period.\n"
+	}
+
+	return output
+}
+
+// truncateString truncates a string to maxLen characters
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
+}
+
+// runReport generates and displays a gaming report
+func runReport(ctx context.Context, db *sql.DB, startDate, endDate time.Time, format string, logger *slog.Logger) error {
+	logger.Info("generating report",
+		"start_date", startDate.Format("2006-01-02"),
+		"end_date", endDate.Format("2006-01-02"),
+		"format", format)
+
+	report, err := generatePlayReport(ctx, db, startDate, endDate)
+	if err != nil {
+		return err
+	}
+
+	var output string
+	switch format {
+	case "json":
+		output, err = formatReportJSON(report)
+		if err != nil {
+			return err
+		}
+	case "markdown", "md":
+		output = formatReportMarkdown(report)
+	default: // "text" or anything else
+		output = formatReportText(report)
+	}
+
+	fmt.Println(output)
+	return nil
 }
 
 func run(ctx context.Context, logger *slog.Logger) error {
@@ -375,6 +652,14 @@ func run(ctx context.Context, logger *slog.Logger) error {
 }
 
 func main() {
+	// Parse command-line flags
+	reportMode := flag.Bool("report", false, "Generate a gaming report instead of syncing")
+	startDateStr := flag.String("start", "", "Report start date (YYYY-MM-DD)")
+	endDateStr := flag.String("end", "", "Report end date (YYYY-MM-DD)")
+	yearToDate := flag.Bool("ytd", true, "Year-to-date report (default)")
+	reportFormat := flag.String("format", "text", "Report format: text, json, or markdown")
+	flag.Parse()
+
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	}))
@@ -382,6 +667,57 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
+	// Report mode
+	if *reportMode {
+		config, err := loadConfig("config.toml")
+		if err != nil {
+			logger.Error("failed to load config", "error", err)
+			os.Exit(1)
+		}
+
+		db, err := connectDB(ctx, config.Database.DSN())
+		if err != nil {
+			logger.Error("failed to connect to database", "error", err)
+			os.Exit(1)
+		}
+		defer db.Close()
+
+		// Determine date range
+		var startDate, endDate time.Time
+		if *startDateStr != "" && *endDateStr != "" {
+			// Custom date range
+			startDate, err = time.Parse("2006-01-02", *startDateStr)
+			if err != nil {
+				logger.Error("invalid start date", "error", err)
+				os.Exit(1)
+			}
+			endDate, err = time.Parse("2006-01-02", *endDateStr)
+			if err != nil {
+				logger.Error("invalid end date", "error", err)
+				os.Exit(1)
+			}
+			// Set end date to end of day
+			endDate = endDate.Add(23*time.Hour + 59*time.Minute + 59*time.Second)
+		} else if *yearToDate {
+			// Year-to-date (default)
+			now := time.Now()
+			startDate = time.Date(now.Year(), 1, 1, 0, 0, 0, 0, now.Location())
+			endDate = now
+		} else {
+			logger.Error("must specify either --ytd or both --start and --end dates")
+			os.Exit(1)
+		}
+
+		if err := runReport(ctx, db, startDate, endDate, *reportFormat, logger); err != nil {
+			logger.Error("report generation failed", "error", err)
+			os.Exit(1)
+		}
+
+		logger.Info("report generation complete")
+		return
+	}
+
+	// Sync mode (default)
 	if err := run(ctx, logger); err != nil {
 		logger.Error("execution failed", "error", err)
 		os.Exit(1)
