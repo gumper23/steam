@@ -106,19 +106,34 @@ Generate gaming reports from historical data:
 ```bash
 # Year-to-date report (default)
 ./steam --report
+# or using shorthand
+./steam -r
 
 # Specific year
 ./steam --report --start 2024-01-01 --end 2024-12-31
+# or using shorthand
+./steam -r -s 2024-01-01 -e 2024-12-31
 
 # Last 30 days
 ./steam --report --start 2024-11-15 --end 2024-12-15
 
 # JSON format (for programmatic use)
 ./steam --report --format json
+# or using shorthand
+./steam -r -f json
 
 # Markdown format (for documentation)
 ./steam --report --format markdown
+# or using shorthand
+./steam -r -f markdown
 ```
+
+**Available Flags:**
+- `-r, --report` - Generate a gaming report instead of syncing
+- `-s, --start` - Report start date (YYYY-MM-DD)
+- `-e, --end` - Report end date (YYYY-MM-DD)
+- `-y, --ytd` - Year-to-date report (default: true)
+- `-f, --format` - Report format: text, json, or markdown (default: text)
 
 ### Example Report Output
 
@@ -127,6 +142,13 @@ Generate gaming reports from historical data:
 
 Total Gaming Time: 12450 minutes (207.5 hours)
 Games Played: 47
+
+Recently Played (Last 5):
+  1. Hades                                    980 min ( 16.3 hrs)  Last: Nov 25 14:30
+  2. Baldur's Gate 3                        1850 min ( 30.8 hrs)  Last: Dec 12 20:15
+  3. Elden Ring                             1420 min ( 23.7 hrs)  Last: Aug 10 18:45
+  4. Stardew Valley                          450 min (  7.5 hrs)  Last: Jul 22 16:00
+  5. Celeste                                 320 min (  5.3 hrs)  Last: Jun 15 12:30
 
 Top Games by Playtime:
    1. Baldur's Gate 3                        1850 min ( 30.8 hrs)  [Jan 15 - Dec 12]  (145 sessions)
@@ -207,8 +229,10 @@ ssh user@your-server 'chmod +x /path/to/steam'
 2. **Report Generation**:
    - Queries `playtime_snapshots` for specified date range
    - Aggregates playtime deltas by game
+   - Displays recently played games (last 5 by most recent activity)
+   - Shows top games sorted by total playtime
    - Joins with `games` table for metadata
-   - Formats output in requested format
+   - Formats output in requested format (text, JSON, or Markdown)
 
 3. **Snapshot Logic**:
    - Only records when playtime increases by 5+ minutes
@@ -257,4 +281,7 @@ This project is for personal use.
 ## Acknowledgments
 
 - Steam Web API for game data
-- Go community for excellent libraries (BurntSushi/toml, go-sql-driver/mysql)
+- Go community for excellent libraries:
+  - [BurntSushi/toml](https://github.com/BurntSushi/toml) - TOML configuration parsing
+  - [go-sql-driver/mysql](https://github.com/go-sql-driver/mysql) - MySQL database driver
+  - [spf13/pflag](https://github.com/spf13/pflag) - POSIX/GNU-style command-line flags

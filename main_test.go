@@ -776,6 +776,15 @@ func TestGeneratePlayReport(t *testing.T) {
 		WithArgs(startDate, endDate).
 		WillReturnRows(rows)
 
+	// Mock expectation for recently played games query
+	recentRows := sqlmock.NewRows([]string{"app_id", "name", "total_minutes", "first_played", "last_played", "session_count"}).
+		AddRow(200, "Game 2", 1420, firstPlayed, lastPlayed, 98).
+		AddRow(100, "Game 1", 1850, firstPlayed, lastPlayed, 145)
+
+	mock.ExpectQuery("SELECT(.+)FROM playtime_snapshots(.+)ORDER BY last_played DESC").
+		WithArgs(startDate, endDate, 5).
+		WillReturnRows(recentRows)
+
 	report, err := generatePlayReport(ctx, db, startDate, endDate)
 	if err != nil {
 		t.Errorf("generatePlayReport() unexpected error: %v", err)
@@ -801,6 +810,10 @@ func TestGeneratePlayReport(t *testing.T) {
 
 	if len(report.TopGames) != 2 {
 		t.Errorf("len(report.TopGames) = %d, want 2", len(report.TopGames))
+	}
+
+	if len(report.RecentGames) != 2 {
+		t.Errorf("len(report.RecentGames) = %d, want 2", len(report.RecentGames))
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
