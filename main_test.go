@@ -424,7 +424,6 @@ func TestInsertGame(t *testing.T) {
 		PlaytimeMacForever:       30,
 		PlaytimeWindowsForever:   20,
 	}
-	created := "2024-01-15"
 
 	t.Run("successful insert", func(t *testing.T) {
 		mock.ExpectExec("insert into games").
@@ -439,11 +438,10 @@ func TestInsertGame(t *testing.T) {
 				game.PlaytimeLinuxForever,
 				game.PlaytimeMacForever,
 				game.PlaytimeWindowsForever,
-				created,
 			).
 			WillReturnResult(sqlmock.NewResult(1, 1))
 
-		err := insertGame(ctx, db, game, created)
+		err := insertGame(ctx, db, game)
 		if err != nil {
 			t.Errorf("insertGame() unexpected error: %v", err)
 		}
@@ -545,8 +543,6 @@ func TestSyncGames(t *testing.T) {
 		200: 0,   // No change
 	}
 
-	created := "2024-01-15"
-
 	// Expect update for game 100
 	mock.ExpectExec("update games set playtime_forever = \\? where app_id = \\?").
 		WithArgs(150, 100).
@@ -554,11 +550,11 @@ func TestSyncGames(t *testing.T) {
 
 	// Expect insert for game 300
 	mock.ExpectExec("insert into games").
-		WithArgs(300, false, "", "", "Game 3", 0, 100, 0, 0, 0, created).
+		WithArgs(300, false, "", "", "Game 3", 0, 100, 0, 0, 0).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	logger := newTestLogger(t)
-	updated, inserted, played, err := syncGames(ctx, db, ogs, storedGames, created, logger)
+	updated, inserted, played, err := syncGames(ctx, db, ogs, storedGames, logger)
 	if err != nil {
 		t.Errorf("syncGames() unexpected error: %v", err)
 	}

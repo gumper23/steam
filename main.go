@@ -165,12 +165,12 @@ func connectDB(ctx context.Context, dsn string) (*sql.DB, error) {
 	return db, nil
 }
 
-// getCurrentTimestamp retrieves the current database timestamp
+// getCurrentTimestamp retrieves the current database date for created_at column
 func getCurrentTimestamp(ctx context.Context, db *sql.DB) (string, error) {
 	var created string
-	err := db.QueryRowContext(ctx, "select current_timestamp() as created").Scan(&created)
+	err := db.QueryRowContext(ctx, "select curdate() as created").Scan(&created)
 	if err != nil {
-		return "", fmt.Errorf("failed to get current timestamp: %w", err)
+		return "", fmt.Errorf("failed to get current date: %w", err)
 	}
 	return created, nil
 }
@@ -245,7 +245,7 @@ func updateGame(ctx context.Context, db *sql.DB, appid, playtime int) error {
 }
 
 // insertGame inserts a new game into the database
-func insertGame(ctx context.Context, db *sql.DB, game Game, created string) error {
+func insertGame(ctx context.Context, db *sql.DB, game Game) error {
 	query := `
 insert into games
 (
@@ -273,7 +273,7 @@ values
 	, ?
 	, ?
 	, ?
-	, ?
+	, curdate()
 )`
 	_, err := db.ExecContext(ctx, query,
 		game.Appid,
@@ -285,8 +285,7 @@ values
 		game.PlaytimeForever,
 		game.PlaytimeLinuxForever,
 		game.PlaytimeMacForever,
-		game.PlaytimeWindowsForever,
-		created)
+		game.PlaytimeWindowsForever)
 	if err != nil {
 		return fmt.Errorf("failed to insert game %d: %w", game.Appid, err)
 	}
@@ -336,7 +335,7 @@ func recordPlaytimeSnapshot(ctx context.Context, db *sql.DB, appid, playtimeTota
 }
 
 // syncGames synchronizes the local database with games from the Steam API
-func syncGames(ctx context.Context, db *sql.DB, ogs *OwnedGames, storedGames map[int]int, created string, logger *slog.Logger) (int, int, int, error) {
+func syncGames(ctx context.Context, db *sql.DB, ogs *OwnedGames, storedGames map[int]int, logger *slog.Logger) (int, int, int, error) {
 	var updated, inserted, played int
 	snapshotTime := time.Now()
 
@@ -363,7 +362,7 @@ func syncGames(ctx context.Context, db *sql.DB, ogs *OwnedGames, storedGames map
 				}
 			}
 		} else {
-			if err := insertGame(ctx, db, game, created); err != nil {
+			if err := insertGame(ctx, db, game); err != nil {
 				return updated, inserted, played, err
 			}
 			inserted++
@@ -579,11 +578,6 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	}
 	defer db.Close()
 
-	created, err := getCurrentTimestamp(ctx, db)
-	if err != nil {
-		return err
-	}
-
 	storedGames, err := getStoredGames(ctx, db)
 	if err != nil {
 		return err
@@ -598,7 +592,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		return err
 	}
 
-	updated, inserted, played, err := syncGames(ctx, db, ogs, storedGames, created, logger)
+	updated, inserted, played, err := syncGames(ctx, db, ogs, storedGames, logger)
 	if err != nil {
 		return err
 	}
