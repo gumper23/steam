@@ -104,18 +104,30 @@ This will:
 Generate gaming reports from historical data:
 
 ```bash
-# Year-to-date report (default)
+# Year-to-date report (default - Jan 1 to now)
 ./steam --report
 # or using shorthand
 ./steam -r
 
-# Specific year
+# Last 7 days
+./steam --report --last-week
+# or using shorthand
+./steam -r -w
+
+# Last 30 days
+./steam --report --last-month
+# or using shorthand
+./steam -r -m
+
+# Last 365 days
+./steam --report --last-year
+# or using shorthand
+./steam -r -l
+
+# Specific date range
 ./steam --report --start 2024-01-01 --end 2024-12-31
 # or using shorthand
 ./steam -r -s 2024-01-01 -e 2024-12-31
-
-# Last 30 days
-./steam --report --start 2024-11-15 --end 2024-12-15
 
 # JSON format (for programmatic use)
 ./steam --report --format json
@@ -126,14 +138,22 @@ Generate gaming reports from historical data:
 ./steam --report --format markdown
 # or using shorthand
 ./steam -r -f markdown
+
+# Combine convenience flags with format
+./steam -r -w -f json  # Last week in JSON format
 ```
 
 **Available Flags:**
 - `-r, --report` - Generate a gaming report instead of syncing
-- `-s, --start` - Report start date (YYYY-MM-DD)
-- `-e, --end` - Report end date (YYYY-MM-DD)
-- `-y, --ytd` - Year-to-date report (default: true)
+- `-w, --last-week` - Report for last 7 days
+- `-m, --last-month` - Report for last 30 days
+- `-l, --last-year` - Report for last 365 days
+- `-y, --ytd` - Year-to-date report (Jan 1 to now)
+- `-s, --start` - Report start date (YYYY-MM-DD, requires --end)
+- `-e, --end` - Report end date (YYYY-MM-DD, requires --start)
 - `-f, --format` - Report format: text, json, or markdown (default: text)
+
+**Note:** Date range options are mutually exclusive. Use only one of: `--ytd`, `--last-week`, `--last-month`, `--last-year`, or `--start`/`--end`.
 
 ### Example Report Output
 
