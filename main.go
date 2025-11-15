@@ -130,7 +130,7 @@ func (c *Config) Validate() error {
 
 // DSN returns a MySQL data source name from the database configuration
 func (d *Database) DSN() string {
-	return fmt.Sprintf("%s:%s@tcp(%s:%s)/%s",
+	return fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true&loc=UTC",
 		d.User,
 		d.Password,
 		d.Host,
@@ -474,8 +474,8 @@ func formatReportText(report *PlayReport) string {
 				truncateString(game.Name, 40),
 				game.MinutesPlayed,
 				game.HoursPlayed,
-				game.FirstPlayed.Format("Jan 02"),
-				game.LastPlayed.Format("Jan 02"),
+				game.FirstPlayed.Local().Format("Jan 02"),
+				game.LastPlayed.Local().Format("Jan 02"),
 				game.SessionCount)
 		}
 	} else {
@@ -518,8 +518,8 @@ func formatReportMarkdown(report *PlayReport) string {
 				game.Name,
 				game.HoursPlayed,
 				game.SessionCount,
-				game.FirstPlayed.Format("Jan 02"),
-				game.LastPlayed.Format("Jan 02"))
+				game.FirstPlayed.Local().Format("Jan 02"),
+				game.LastPlayed.Local().Format("Jan 02"))
 		}
 	} else {
 		output += "No games played in this period.\n"
@@ -653,23 +653,23 @@ func main() {
 		// Determine date range
 		var startDate, endDate time.Time
 		if *startDateStr != "" && *endDateStr != "" {
-			// Custom date range
-			startDate, err = time.Parse("2006-01-02", *startDateStr)
+			// Custom date range - parse in UTC for consistency with database
+			startDate, err = time.ParseInLocation("2006-01-02", *startDateStr, time.UTC)
 			if err != nil {
 				logger.Error("invalid start date", "error", err)
 				os.Exit(1)
 			}
-			endDate, err = time.Parse("2006-01-02", *endDateStr)
+			endDate, err = time.ParseInLocation("2006-01-02", *endDateStr, time.UTC)
 			if err != nil {
 				logger.Error("invalid end date", "error", err)
 				os.Exit(1)
 			}
-			// Set end date to end of day
+			// Set end date to end of day (UTC)
 			endDate = endDate.Add(23*time.Hour + 59*time.Minute + 59*time.Second)
 		} else if *yearToDate {
-			// Year-to-date (default)
-			now := time.Now()
-			startDate = time.Date(now.Year(), 1, 1, 0, 0, 0, 0, now.Location())
+			// Year-to-date (default) - use UTC for consistency with database
+			now := time.Now().UTC()
+			startDate = time.Date(now.Year(), 1, 1, 0, 0, 0, 0, time.UTC)
 			endDate = now
 		} else {
 			logger.Error("must specify either --ytd or both --start and --end dates")

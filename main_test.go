@@ -168,7 +168,7 @@ func TestDatabase_DSN(t *testing.T) {
 				Password: "password",
 				Schema:   "steam",
 			},
-			want: "root:password@tcp(localhost:3306)/steam",
+			want: "root:password@tcp(localhost:3306)/steam?parseTime=true&loc=UTC",
 		},
 		{
 			name: "empty password",
@@ -179,7 +179,7 @@ func TestDatabase_DSN(t *testing.T) {
 				Password: "",
 				Schema:   "testdb",
 			},
-			want: "testuser:@tcp(127.0.0.1:13306)/testdb",
+			want: "testuser:@tcp(127.0.0.1:13306)/testdb?parseTime=true&loc=UTC",
 		},
 		{
 			name: "special characters in password",
@@ -190,7 +190,7 @@ func TestDatabase_DSN(t *testing.T) {
 				Password: "p@ssw0rd!",
 				Schema:   "production",
 			},
-			want: "app:p@ssw0rd!@tcp(db.example.com:3306)/production",
+			want: "app:p@ssw0rd!@tcp(db.example.com:3306)/production?parseTime=true&loc=UTC",
 		},
 	}
 
