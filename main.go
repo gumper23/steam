@@ -99,6 +99,7 @@ type GamePlaySummary struct {
 type PlayReport struct {
 	StartDate    time.Time
 	EndDate      time.Time
+	AllTime      bool
 	TotalMinutes int
 	TotalHours   float64
 	GamesPlayed  int
@@ -274,7 +275,7 @@ values
 	, ?
 	, ?
 	, ?
-	, curdate()
+	, '1970-01-01'
 )`
 	_, err := db.ExecContext(ctx, query,
 		game.Appid,
@@ -510,9 +511,13 @@ func generatePlayReport(ctx context.Context, db *sql.DB, startDate, endDate time
 // formatReportText formats a report as human-readable text
 func formatReportText(report *PlayReport) string {
 	var output string
-	output += fmt.Sprintf("=== Gaming Report: %s to %s ===\n\n",
-		report.StartDate.Format("2006-01-02"),
-		report.EndDate.Format("2006-01-02"))
+	if report.AllTime {
+		output += "=== Gaming Report: All Time ===\n\n"
+	} else {
+		output += fmt.Sprintf("=== Gaming Report: %s to %s ===\n\n",
+			report.StartDate.Format("2006-01-02"),
+			report.EndDate.Format("2006-01-02"))
+	}
 
 	output += fmt.Sprintf("Total Gaming Time: %d minutes (%.1f hours)\n", report.TotalMinutes, report.TotalHours)
 	output += fmt.Sprintf("Games Played: %d\n\n", report.GamesPlayed)
@@ -565,9 +570,13 @@ func formatReportJSON(report *PlayReport) (string, error) {
 // formatReportMarkdown formats a report as Markdown
 func formatReportMarkdown(report *PlayReport) string {
 	var output string
-	output += fmt.Sprintf("# Gaming Report: %s to %s\n\n",
-		report.StartDate.Format("January 2, 2006"),
-		report.EndDate.Format("January 2, 2006"))
+	if report.AllTime {
+		output += "# Gaming Report: All Time\n\n"
+	} else {
+		output += fmt.Sprintf("# Gaming Report: %s to %s\n\n",
+			report.StartDate.Format("January 2, 2006"),
+			report.EndDate.Format("January 2, 2006"))
+	}
 
 	output += fmt.Sprintf("**Total Gaming Time:** %.1f hours (%d minutes)\n\n", report.TotalHours, report.TotalMinutes)
 	output += fmt.Sprintf("**Games Played:** %d\n\n", report.GamesPlayed)
@@ -619,16 +628,21 @@ func truncateString(s string, maxLen int) string {
 }
 
 // runReport generates and displays a gaming report
-func runReport(ctx context.Context, db *sql.DB, startDate, endDate time.Time, format string, logger *slog.Logger) error {
-	logger.Info("generating report",
-		"start_date", startDate.Format("2006-01-02"),
-		"end_date", endDate.Format("2006-01-02"),
-		"format", format)
+func runReport(ctx context.Context, db *sql.DB, startDate, endDate time.Time, format string, allTime bool, logger *slog.Logger) error {
+	if allTime {
+		logger.Info("generating report", "period", "all time", "format", format)
+	} else {
+		logger.Info("generating report",
+			"start_date", startDate.Format("2006-01-02"),
+			"end_date", endDate.Format("2006-01-02"),
+			"format", format)
+	}
 
 	report, err := generatePlayReport(ctx, db, startDate, endDate)
 	if err != nil {
 		return err
 	}
+	report.AllTime = allTime
 
 	var output string
 	switch format {
@@ -705,6 +719,7 @@ func main() {
 	lastWeek := flag.BoolP("last-week", "w", false, "Report for last 7 days")
 	lastMonth := flag.BoolP("last-month", "m", false, "Report for last 30 days")
 	lastYear := flag.BoolP("last-year", "l", false, "Report for last 365 days")
+	allTime := flag.BoolP("all-time", "a", false, "Report for all time")
 	reportFormat := flag.StringP("format", "f", "text", "Report format: text, json, or markdown")
 	flag.Parse()
 
@@ -751,9 +766,12 @@ func main() {
 		if *lastYear {
 			optionsSet++
 		}
+		if *allTime {
+			optionsSet++
+		}
 
 		if optionsSet > 1 {
-			logger.Error("cannot specify multiple date range options (--ytd, --last-week, --last-month, --last-year, or --start/--end)")
+			logger.Error("cannot specify multiple date range options (--ytd, --last-week, --last-month, --last-year, --all-time, or --start/--end)")
 			os.Exit(1)
 		}
 
@@ -786,13 +804,17 @@ func main() {
 			// Last 365 days
 			startDate = now.AddDate(0, 0, -365)
 			endDate = now
+		} else if *allTime {
+			// All time: use epoch as start
+			startDate = time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC)
+			endDate = now
 		} else {
 			// Default to year-to-date if no option specified
 			startDate = time.Date(now.Year(), 1, 1, 0, 0, 0, 0, time.UTC)
 			endDate = now
 		}
 
-		if err := runReport(ctx, db, startDate, endDate, *reportFormat, logger); err != nil {
+		if err := runReport(ctx, db, startDate, endDate, *reportFormat, *allTime, logger); err != nil {
 			logger.Error("report generation failed", "error", err)
 			os.Exit(1)
 		}

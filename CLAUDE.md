@@ -89,6 +89,10 @@ make build-all
 ./steam -r -l
 ./steam --report --last-year
 
+# All time
+./steam -r -a
+./steam --report --all-time
+
 # Custom date range
 ./steam --report --start 2024-01-01 --end 2024-12-31
 # or using shorthand
@@ -102,6 +106,7 @@ make build-all
 # Combine convenience flags
 ./steam -r -w -f json  # Last week in JSON format
 ./steam -r -m -f markdown  # Last month in Markdown format
+./steam -r -a -f markdown  # All time in Markdown format
 ```
 
 **Available flags (uses pflag for POSIX/GNU-style flags):**
@@ -110,11 +115,12 @@ make build-all
 - `-m, --last-month` - Report for last 30 days
 - `-l, --last-year` - Report for last 365 days
 - `-y, --ytd` - Year-to-date report (Jan 1 to now)
+- `-a, --all-time` - Report for all time
 - `-s, --start` - Report start date (YYYY-MM-DD, requires --end)
 - `-e, --end` - Report end date (YYYY-MM-DD, requires --start)
 - `-f, --format` - Report format: text, json, or markdown (default: text)
 
-**Note:** Date range options are mutually exclusive. Use only one of: `--ytd`, `--last-week`, `--last-month`, `--last-year`, or `--start`/`--end`.
+**Note:** Date range options are mutually exclusive. Use only one of: `--ytd`, `--last-week`, `--last-month`, `--last-year`, `--all-time`, or `--start`/`--end`.
 
 **Run tests:**
 ```bash
