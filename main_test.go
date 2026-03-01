@@ -785,7 +785,7 @@ func TestGeneratePlayReport(t *testing.T) {
 		WithArgs(startDate, endDate, 5).
 		WillReturnRows(recentRows)
 
-	report, err := generatePlayReport(ctx, db, startDate, endDate)
+	report, err := generatePlayReport(ctx, db, startDate, endDate, false)
 	if err != nil {
 		t.Errorf("generatePlayReport() unexpected error: %v", err)
 	}

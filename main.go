@@ -430,6 +430,107 @@ func getGamesPlayedInRange(ctx context.Context, db *sql.DB, startDate, endDate t
 	return games, nil
 }
 
+// getGamesAllTime retrieves all games using playtime_forever from the games table,
+// which reflects the true all-time total from Steam regardless of when snapshot tracking started.
+func getGamesAllTime(ctx context.Context, db *sql.DB) ([]GamePlaySummary, error) {
+	query := `
+		SELECT
+			g.app_id,
+			g.name,
+			g.playtime_forever as total_minutes,
+			MIN(s.snapshot_date) as first_played,
+			MAX(s.snapshot_date) as last_played,
+			COUNT(s.id) as session_count
+		FROM games g
+		LEFT JOIN playtime_snapshots s ON g.app_id = s.app_id
+		WHERE g.playtime_forever > 0
+		GROUP BY g.app_id, g.name
+		ORDER BY total_minutes DESC`
+
+	rows, err := db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query all-time games: %w", err)
+	}
+	defer rows.Close()
+
+	var games []GamePlaySummary
+	for rows.Next() {
+		var game GamePlaySummary
+		var firstPlayed, lastPlayed sql.NullTime
+		if err := rows.Scan(
+			&game.AppID,
+			&game.Name,
+			&game.MinutesPlayed,
+			&firstPlayed,
+			&lastPlayed,
+			&game.SessionCount,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan all-time game summary: %w", err)
+		}
+		game.HoursPlayed = float64(game.MinutesPlayed) / 60.0
+		if firstPlayed.Valid {
+			game.FirstPlayed = firstPlayed.Time
+		}
+		if lastPlayed.Valid {
+			game.LastPlayed = lastPlayed.Time
+		}
+		games = append(games, game)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating all-time game summaries: %w", err)
+	}
+
+	return games, nil
+}
+
+// getRecentlyPlayedAllTime retrieves the most recently played games across all time,
+// using snapshot data for recency ordering.
+func getRecentlyPlayedAllTime(ctx context.Context, db *sql.DB, limit int) ([]GamePlaySummary, error) {
+	query := `
+		SELECT
+			s.app_id,
+			g.name,
+			g.playtime_forever as total_minutes,
+			MIN(s.snapshot_date) as first_played,
+			MAX(s.snapshot_date) as last_played,
+			COUNT(*) as session_count
+		FROM playtime_snapshots s
+		JOIN games g ON s.app_id = g.app_id
+		GROUP BY s.app_id, g.name
+		ORDER BY last_played DESC
+		LIMIT ?`
+
+	rows, err := db.QueryContext(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query all-time recent games: %w", err)
+	}
+	defer rows.Close()
+
+	var games []GamePlaySummary
+	for rows.Next() {
+		var game GamePlaySummary
+		if err := rows.Scan(
+			&game.AppID,
+			&game.Name,
+			&game.MinutesPlayed,
+			&game.FirstPlayed,
+			&game.LastPlayed,
+			&game.SessionCount,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan all-time recent game: %w", err)
+		}
+		game.HoursPlayed = float64(game.MinutesPlayed) / 60.0
+		games = append(games, game)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating all-time recent games: %w", err)
+	}
+
+	return games, nil
+}
+
 // getRecentlyPlayedGames retrieves the most recently played games (by last_played date)
 func getRecentlyPlayedGames(ctx context.Context, db *sql.DB, startDate, endDate time.Time, limit int) ([]GamePlaySummary, error) {
 	query := `
@@ -478,16 +579,32 @@ func getRecentlyPlayedGames(ctx context.Context, db *sql.DB, startDate, endDate 
 	return games, nil
 }
 
-// generatePlayReport creates a complete play report for the given time period
-func generatePlayReport(ctx context.Context, db *sql.DB, startDate, endDate time.Time) (*PlayReport, error) {
-	games, err := getGamesPlayedInRange(ctx, db, startDate, endDate)
-	if err != nil {
-		return nil, err
-	}
+// generatePlayReport creates a complete play report for the given time period.
+// When allTime is true, playtime totals come from games.playtime_forever (the authoritative
+// Steam value) rather than summing snapshot deltas, so games tracked before the snapshot
+// system started are correctly ranked.
+func generatePlayReport(ctx context.Context, db *sql.DB, startDate, endDate time.Time, allTime bool) (*PlayReport, error) {
+	var games, recentGames []GamePlaySummary
+	var err error
 
-	recentGames, err := getRecentlyPlayedGames(ctx, db, startDate, endDate, 5)
-	if err != nil {
-		return nil, err
+	if allTime {
+		games, err = getGamesAllTime(ctx, db)
+		if err != nil {
+			return nil, err
+		}
+		recentGames, err = getRecentlyPlayedAllTime(ctx, db, 5)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		games, err = getGamesPlayedInRange(ctx, db, startDate, endDate)
+		if err != nil {
+			return nil, err
+		}
+		recentGames, err = getRecentlyPlayedGames(ctx, db, startDate, endDate, 5)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	totalMinutes := 0
@@ -542,14 +659,22 @@ func formatReportText(report *PlayReport) string {
 			if i >= 20 { // Show top 20
 				break
 			}
-			output += fmt.Sprintf("  %2d. %-40s %5d min (%5.1f hrs)  [%s - %s]  (%d sessions)\n",
-				i+1,
-				truncateString(game.Name, 40),
-				game.MinutesPlayed,
-				game.HoursPlayed,
-				game.FirstPlayed.Local().Format("Jan 02"),
-				game.LastPlayed.Local().Format("Jan 02"),
-				game.SessionCount)
+			if report.AllTime {
+				output += fmt.Sprintf("  %2d. %-40s %5d min (%5.1f hrs)\n",
+					i+1,
+					truncateString(game.Name, 40),
+					game.MinutesPlayed,
+					game.HoursPlayed)
+			} else {
+				output += fmt.Sprintf("  %2d. %-40s %5d min (%5.1f hrs)  [%s - %s]  (%d sessions)\n",
+					i+1,
+					truncateString(game.Name, 40),
+					game.MinutesPlayed,
+					game.HoursPlayed,
+					game.FirstPlayed.Local().Format("Jan 02"),
+					game.LastPlayed.Local().Format("Jan 02"),
+					game.SessionCount)
+			}
 		}
 	} else {
 		output += "No games played in this period.\n"
@@ -597,20 +722,33 @@ func formatReportMarkdown(report *PlayReport) string {
 
 	if len(report.TopGames) > 0 {
 		output += "## Top Games\n\n"
-		output += "| Rank | Game | Time Played | Sessions | Period |\n"
-		output += "|------|------|-------------|----------|--------|\n"
-
-		for i, game := range report.TopGames {
-			if i >= 20 { // Show top 20
-				break
+		if report.AllTime {
+			output += "| Rank | Game | Time Played |\n"
+			output += "|------|------|-------------|\n"
+			for i, game := range report.TopGames {
+				if i >= 20 { // Show top 20
+					break
+				}
+				output += fmt.Sprintf("| %d | %s | %.1f hrs |\n",
+					i+1,
+					game.Name,
+					game.HoursPlayed)
 			}
-			output += fmt.Sprintf("| %d | %s | %.1f hrs | %d | %s - %s |\n",
-				i+1,
-				game.Name,
-				game.HoursPlayed,
-				game.SessionCount,
-				game.FirstPlayed.Local().Format("Jan 02"),
-				game.LastPlayed.Local().Format("Jan 02"))
+		} else {
+			output += "| Rank | Game | Time Played | Sessions | Period |\n"
+			output += "|------|------|-------------|----------|--------|\n"
+			for i, game := range report.TopGames {
+				if i >= 20 { // Show top 20
+					break
+				}
+				output += fmt.Sprintf("| %d | %s | %.1f hrs | %d | %s - %s |\n",
+					i+1,
+					game.Name,
+					game.HoursPlayed,
+					game.SessionCount,
+					game.FirstPlayed.Local().Format("Jan 02"),
+					game.LastPlayed.Local().Format("Jan 02"))
+			}
 		}
 	} else {
 		output += "No games played in this period.\n"
@@ -638,7 +776,7 @@ func runReport(ctx context.Context, db *sql.DB, startDate, endDate time.Time, fo
 			"format", format)
 	}
 
-	report, err := generatePlayReport(ctx, db, startDate, endDate)
+	report, err := generatePlayReport(ctx, db, startDate, endDate, allTime)
 	if err != nil {
 		return err
 	}
@@ -747,7 +885,7 @@ func main() {
 
 		// Determine date range
 		var startDate, endDate time.Time
-		now := time.Now().UTC()
+		now := time.Now()
 
 		// Check how many date range options are set
 		optionsSet := 0
@@ -776,18 +914,18 @@ func main() {
 		}
 
 		if *startDateStr != "" && *endDateStr != "" {
-			// Custom date range - parse in UTC for consistency with database
-			startDate, err = time.ParseInLocation("2006-01-02", *startDateStr, time.UTC)
+			// Custom date range - parse in local time so dates match the user's calendar
+			startDate, err = time.ParseInLocation("2006-01-02", *startDateStr, now.Location())
 			if err != nil {
 				logger.Error("invalid start date", "error", err)
 				os.Exit(1)
 			}
-			endDate, err = time.ParseInLocation("2006-01-02", *endDateStr, time.UTC)
+			endDate, err = time.ParseInLocation("2006-01-02", *endDateStr, now.Location())
 			if err != nil {
 				logger.Error("invalid end date", "error", err)
 				os.Exit(1)
 			}
-			// Set end date to end of day (UTC)
+			// Set end date to end of day
 			endDate = endDate.Add(23*time.Hour + 59*time.Minute + 59*time.Second)
 		} else if *startDateStr != "" || *endDateStr != "" {
 			logger.Error("must specify both --start and --end dates")
@@ -806,11 +944,11 @@ func main() {
 			endDate = now
 		} else if *allTime {
 			// All time: use epoch as start
-			startDate = time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC)
+			startDate = time.Date(1970, 1, 1, 0, 0, 0, 0, now.Location())
 			endDate = now
 		} else {
 			// Default to year-to-date if no option specified
-			startDate = time.Date(now.Year(), 1, 1, 0, 0, 0, 0, time.UTC)
+			startDate = time.Date(now.Year(), 1, 1, 0, 0, 0, 0, now.Location())
 			endDate = now
 		}
 
